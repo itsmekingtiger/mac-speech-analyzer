@@ -15,7 +15,7 @@ func checkMacosVersion () throws {
     }
 }
 
-func transcribe(url: String, locale: String?, emitLiveSegments: Bool) async throws -> String {
+func transcribe(url: String, locale: String?, onSegment: @escaping @Sendable (String) -> Void) async throws -> String {
     try checkMacosVersion()
     let locale = await getLocale(customLocale: locale)
 
@@ -37,9 +37,7 @@ func transcribe(url: String, locale: String?, emitLiveSegments: Bool) async thro
     let consumer = Task {
     for try await result in transcriber.results where result.isFinal {
             let piece = String(result.text.characters)
-            if emitLiveSegments {
-                msaLiveTranscriptionSendFragment(piece)
-            }
+            onSegment(piece)
             transcript += piece
         }
         return transcript

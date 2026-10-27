@@ -21,24 +21,21 @@ def _live_cb(msg):
 
 _lib = ctypes.CDLL(str(Path(__file__).parent / f"libmacspeechanalyzer_core.dylib"))
 
-# int32 msa_transcribe(const char* url, const char* locale, char** outText, bool* emitLiveFragments)
-_lib.msa_transcribe.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.POINTER(ctypes.c_void_p), ctypes.c_bool]
-_lib.msa_transcribe.restype = ctypes.c_int32
+# The segment callback and error output are scoped to this invocation.
+_lib.msa_transcribe_v2.argtypes = [
+    ctypes.c_char_p, ctypes.c_char_p,
+    ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_void_p),
+    SEGMENT_CB,
+]
+_lib.msa_transcribe_v2.restype = ctypes.c_int32
 
 # void msa_free_string(char* ptr)
 _lib.msa_free_string.argtypes = [ctypes.c_void_p]
 _lib.msa_free_string.restype = None
 
-# char* msa_last_error() — strdup'ed message, caller frees
-_lib.msa_last_error.argtypes = []
-_lib.msa_last_error.restype = ctypes.c_void_p
-
 _lib.msa_set_log_callback.argtypes = [LOG_CB]
 _lib.msa_set_log_callback.restype = None
 _lib.msa_set_log_callback(_log_cb)
-
-_lib.msa_set_live_callback.argtypes = [SEGMENT_CB]
-_lib.msa_set_live_callback.restype = None
 
 class SpeechAnalyzerError(Exception):
     pass
@@ -49,11 +46,6 @@ def _take_string(ptr: ctypes.c_void_p) -> str:
         return ctypes.string_at(ptr).decode("utf-8")
     finally:
         _lib.msa_free_string(ptr)
-
-def _raise_last_error(status: int) -> None:
-    ptr = _lib.msa_last_error()
-    msg = _take_string(ctypes.c_void_p(ptr)) if ptr else f"native error (status {status})"
-    raise SpeechAnalyzerError(msg)
 
 def transcribe(path: str | Path, locale: str | None = None, on_segment: Callable[[str], None] | None = None) -> str:
     """Transcribe an audio file on-device.
@@ -88,29 +80,30 @@ def transcribe(path: str | Path, locale: str | None = None, on_segment: Callable
         RuntimeError: If the host is running a macOS version older than
             26.0, or if the native transcription pipeline fails.
     """
-    emit_live_segments = False
+    # Keep this CFUNCTYPE object alive until the native call has fully finished.
+    cb = SEGMENT_CB()  # NULL callback
     if on_segment is print:
-        _lib.msa_set_live_callback(_live_cb)
-        emit_live_segments = True
+        cb = _live_cb
     elif on_segment is not None:
         def _trampoline(raw: bytes | None) -> None:
-                    if raw is not None:
-                        on_segment(raw.decode("utf-8", "replace"))
+            if raw is not None:
+                on_segment(raw.decode("utf-8", "replace"))
         cb = SEGMENT_CB(_trampoline)
-        _lib.msa_set_live_callback(cb)
-        emit_live_segments = True
 
     path = os.fspath(path)
 
     out = ctypes.c_void_p()
-    status = _lib.msa_transcribe(
+    error = ctypes.c_void_p()
+    status = _lib.msa_transcribe_v2(
         path.encode("utf-8"),
         locale.encode("utf-8") if locale is not None else None,
-        ctypes.byref(out),                       # &out  ->  char**
-        emit_live_segments
+        ctypes.byref(out),
+        ctypes.byref(error),
+        cb,
     )
     if status != 0:
-        _raise_last_error(status)
+        msg = _take_string(error) if error.value else f"native error (status {status})"
+        raise SpeechAnalyzerError(msg)
     if not out.value:
         raise SpeechAnalyzerError("transcribe returned success but no text")
     return _take_string(out)
