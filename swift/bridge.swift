@@ -25,13 +25,31 @@ public func msaTranscribe(
                         _ outText: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?,
                         _ outError: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?,
                         _ onSegment: MSALiveTranscription?) -> Int32 {
+    msaTranscribeV3(url, locale, outText, outError, onSegment, 0)
+}
+
+// Preserve the v2 ABI for existing callers; v3 optionally returns JSON.
+@_cdecl("msa_transcribe_v3")
+public func msaTranscribeV3(
+                        _ url: UnsafePointer<CChar>?,
+                        _ locale: UnsafePointer<CChar>?,
+                        _ outText: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?,
+                        _ outError: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?,
+                        _ onSegment: MSALiveTranscription?,
+                        _ timestamps: Int32) -> Int32 {
     let localeStr = locale.map { String(cString: $0) }   // nil stays nil
     let urlStr = url.map { String(cString: $0) }!
     do {
-        let text = try runBlocking {
-            try await transcribe(url: urlStr, locale: localeStr, onSegment: { piece in
+        let result = try runBlocking {
+            try await transcribe(url: urlStr, locale: localeStr, timestamps: timestamps != 0, onSegment: { piece in
                 if let onSegment { piece.withCString { onSegment($0) } }
             })
+        }
+        let text: String
+        if timestamps != 0 {
+            text = String(decoding: try JSONEncoder().encode(result), as: UTF8.self)
+        } else {
+            text = result.text
         }
         outText?.pointee = strdup(text)
         return 0

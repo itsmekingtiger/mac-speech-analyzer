@@ -55,6 +55,29 @@ text = transcribe("/path/to/file", locale="en", on_segment=log)
 
 Segments are non-overlapping and never revised, so appending them yields the same string as the return value.
 
+### Segment timestamps
+
+Pass `timestamps=True` to return a `TranscriptionResult` with the full text
+and a list of `TranscriptionSegment` objects:
+
+```py
+from macspeechanalyzer import transcribe
+
+result = transcribe("/path/to/file", locale="en", timestamps=True)
+print(result.text)
+for segment in result.segments:
+    print(f"[{segment.start:.2f}s – {segment.end:.2f}s] {segment.text}")
+```
+
+`start` and `end` are seconds from the beginning of the audio file, using
+the audio range reported by SpeechAnalyzer for each finalized segment.
+These are segment-level timestamps. The segment texts concatenate to
+`result.text`; audio with no recognized speech returns `text=""` and
+`segments=[]`. Both result types can also be imported from `macspeechanalyzer`.
+
+The default `timestamps=False` returns a string as before. You can combine
+timestamps with `on_segment`; the callback continues to receive plain text.
+
 ## Technical details
 
 This package is made up of two parts: the Python wrapper provides the API, but the actual functionality is achieved by embedding a Swift project which exposes functions to C. With this kind of three language interplay, a clean separation of concerns is really important. Therefore, the implementation is divided into the following four layers:

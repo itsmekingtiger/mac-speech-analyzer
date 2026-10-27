@@ -1,5 +1,6 @@
 import Foundation
 import AVFAudio
+import CoreMedia
 import Speech
 import Darwin
 
@@ -15,7 +16,18 @@ func checkMacosVersion () throws {
     }
 }
 
-func transcribe(url: String, locale: String?, onSegment: @escaping @Sendable (String) -> Void) async throws -> String {
+struct TranscriptionSegment: Sendable, Encodable {
+    let text: String
+    let start: Double
+    let end: Double
+}
+
+struct TranscriptionResult: Sendable, Encodable {
+    let text: String
+    let segments: [TranscriptionSegment]
+}
+
+func transcribe(url: String, locale: String?, timestamps: Bool = false, onSegment: @escaping @Sendable (String) -> Void) async throws -> TranscriptionResult {
     try checkMacosVersion()
     let locale = await getLocale(customLocale: locale)
 
@@ -35,18 +47,26 @@ func transcribe(url: String, locale: String?, onSegment: @escaping @Sendable (St
 
     let consumer = Task {
         var transcript = ""
+        var segments: [TranscriptionSegment] = []
         do {
             for try await result in transcriber.results where result.isFinal {
                 try Task.checkCancellation()
                 let piece = String(result.text.characters)
                 onSegment(piece)
                 transcript += piece
+                if timestamps {
+                    segments.append(TranscriptionSegment(
+                        text: piece,
+                        start: CMTimeGetSeconds(result.range.start),
+                        end: CMTimeGetSeconds(CMTimeRangeGetEnd(result.range))
+                    ))
+                }
             }
         } catch {
             await analyzer.cancelAndFinishNow()
             throw error
         }
-        return transcript
+        return TranscriptionResult(text: transcript, segments: segments)
     }
 
     do {
