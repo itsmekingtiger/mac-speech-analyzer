@@ -33,25 +33,39 @@ func transcribe(url: String, locale: String?, onSegment: @escaping @Sendable (St
     let inputURL = URL(fileURLWithPath: url)
     let audioFile = try AVAudioFile(forReading: inputURL)
 
-    var transcript = ""
     let consumer = Task {
-    for try await result in transcriber.results where result.isFinal {
-            let piece = String(result.text.characters)
-            onSegment(piece)
-            transcript += piece
+        var transcript = ""
+        do {
+            for try await result in transcriber.results where result.isFinal {
+                try Task.checkCancellation()
+                let piece = String(result.text.characters)
+                onSegment(piece)
+                transcript += piece
+            }
+        } catch {
+            await analyzer.cancelAndFinishNow()
+            throw error
         }
         return transcript
     }
 
-    if let last = try await analyzer.analyzeSequence(from: audioFile) {
-        try await analyzer.finalizeAndFinish(through: last)
-    } else {
-        await analyzer.cancelAndFinishNow()
-    }
-    try await consumer.value
+    do {
+        if let last = try await analyzer.analyzeSequence(from: audioFile) {
+            try await analyzer.finalizeAndFinish(through: last)
+        } else {
+            await analyzer.cancelAndFinishNow()
+        }
+        let transcript = try await consumer.value
 
-    msaLog(INFO, "Successfully transcribed text.")
-    return transcript
+        msaLog(INFO, "Successfully transcribed text.")
+        return transcript
+    } catch {
+        consumer.cancel()
+        await analyzer.cancelAndFinishNow()
+        // Do not return to Python while a task can still invoke its C callback.
+        _ = await consumer.result
+        throw error
+    }
 }
 
 /// Obtains a valid locale (e.g., en_US).
